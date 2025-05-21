@@ -1,0 +1,261 @@
+import pygame
+import sys
+import time
+import random
+from collections import deque
+
+pygame.init()
+
+# Screen setup
+WIDTH, HEIGHT = 600, 450
+TILE_SIZE = 30
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Unlock the Maze")
+clock = pygame.time.Clock()
+font = pygame.font.SysFont(None, 32)
+
+# Load sounds
+key_sound = pygame.mixer.Sound("key.wav")
+door_sound = pygame.mixer.Sound("door.mp3")
+lose_sound = pygame.mixer.Sound("lose.wav")
+pygame.mixer.music.load("fight-for-the-future.mp3")
+pygame.mixer.music.play(-1)
+
+# Load and scale images
+bear_img_raw = pygame.image.load("bear.jpg")
+bear_img_scaled = pygame.transform.scale(bear_img_raw, (TILE_SIZE, TILE_SIZE))
+bear_imgs = {"up": bear_img_scaled, "down": bear_img_scaled, "left": bear_img_scaled, "right": bear_img_scaled}
+current_bear_img = bear_imgs["down"]
+
+bee_img_raw = pygame.image.load("angry-bee.jpg")
+bee_img_scaled = pygame.transform.scale(bee_img_raw, (TILE_SIZE, TILE_SIZE))
+
+background_img = pygame.image.load("background.jpg")
+background_img = pygame.transform.scale(background_img, (WIDTH, HEIGHT))
+
+key_img_raw = pygame.image.load("key.jpg")
+key_img_scaled = pygame.transform.scale(key_img_raw, (int(TILE_SIZE * 0.6), int(TILE_SIZE * 0.6)))
+
+door_locked_img_raw = pygame.image.load("door_locked.jpg")
+door_locked_img = pygame.transform.scale(door_locked_img_raw, (TILE_SIZE, TILE_SIZE))
+
+door_unlocked_img_raw = pygame.image.load("door_unlocked.jpg")  # You need to add this image
+door_unlocked_img = pygame.transform.scale(door_unlocked_img_raw, (TILE_SIZE, TILE_SIZE))
+
+# Colors
+WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
+BLUE = (0, 0, 255)
+RED = (255, 0, 0)
+LIGHT_BLUE = (173, 216, 230)
+
+# Maze layout
+maze1 = [
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,1,1,1,0,1,1,1,1,1,0,1,1,1,1,1,0,1,1],
+    [1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,1],
+    [1,0,1,0,1,1,1,1,1,1,1,1,1,1,1,0,1,1,0,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+]
+mazes = [maze1]
+
+level = 0
+maze = mazes[level]
+ROWS, COLS = len(maze), len(maze[0])
+player_pos = [1, 1]
+key_pos = [3, 10]
+door_pos = [5, 18]
+powerup_pos = [4, 3]
+has_key = False
+has_powerup = False
+powerup_timer = 0
+start_time = time.time()
+countdown = 60
+enemy_pos = [2, 5]
+fog_radius = 90
+menu = True
+won = False
+lost = False
+
+brightness_alpha = 255
+fade_in = False
+fade_out = False
+fade_speed = 8
+enemy_move_delay = 15
+enemy_move_counter = 0
+
+def draw_maze():
+    for y in range(ROWS):
+        for x in range(COLS):
+            rect = pygame.Rect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
+            if maze[y][x] == 1:
+                pygame.draw.rect(screen, BLACK, rect)
+            else:
+                pygame.draw.rect(screen, WHITE, rect)
+
+            if [y, x] == key_pos and not has_key:
+                key_rect = key_img_scaled.get_rect(center=rect.center)
+                screen.blit(key_img_scaled, key_rect.topleft)
+
+            if [y, x] == door_pos:
+                if has_key:
+                    screen.blit(door_unlocked_img, rect.topleft)
+                else:
+                    screen.blit(door_locked_img, rect.topleft)
+
+            if [y, x] == powerup_pos and not has_powerup:
+                pygame.draw.circle(screen, LIGHT_BLUE, rect.center, 10)
+
+def draw_fog():
+    fog = pygame.Surface((WIDTH, HEIGHT))
+    fog.fill(BLACK)
+    fog.set_alpha(180)
+    px, py = player_pos[1] * TILE_SIZE + TILE_SIZE // 2, player_pos[0] * TILE_SIZE + TILE_SIZE // 2
+    pygame.draw.circle(fog, (0, 0, 0, 0), (px, py), fog_radius)
+    screen.blit(fog, (0, 0))
+
+def move_player(dx, dy):
+    global current_bear_img
+    ny, nx = player_pos[0] + dy, player_pos[1] + dx
+    if 0 <= ny < ROWS and 0 <= nx < COLS and maze[ny][nx] == 0:
+        player_pos[0], player_pos[1] = ny, nx
+        direction = "down" if dy > 0 else "up" if dy < 0 else "right" if dx > 0 else "left"
+        current_bear_img = bear_imgs[direction]
+
+def bfs(start, goal):
+    queue = deque([(start, [])])
+    visited = set()
+    while queue:
+        (y, x), path = queue.popleft()
+        if (y, x) == goal:
+            return path
+        for dy, dx in [(-1,0),(1,0),(0,-1),(0,1)]:
+            ny, nx = y + dy, x + dx
+            if 0 <= ny < ROWS and 0 <= nx < COLS and maze[ny][nx] == 0 and (ny, nx) not in visited:
+                visited.add((ny, nx))
+                queue.append(((ny, nx), path + [(dy, dx)]))
+    return []
+
+def move_enemy():
+    path = bfs(tuple(enemy_pos), tuple(player_pos))
+    if path:
+        dy, dx = path[0]
+        enemy_pos[0] += dy
+        enemy_pos[1] += dx
+
+def reset():
+    global player_pos, enemy_pos, has_key, has_powerup, start_time, countdown
+    global won, lost, current_bear_img, brightness_alpha, fade_in, fade_out, enemy_move_counter
+    player_pos[:] = [1, 1]
+    enemy_pos[:] = [2, 5]
+    has_key = False
+    has_powerup = False
+    start_time = time.time()
+    countdown = 60
+    won = lost = False
+    current_bear_img = bear_imgs["down"]
+    brightness_alpha = 255
+    fade_in = True
+    fade_out = False
+    enemy_move_counter = 0
+
+# Game loop
+while True:
+    if menu:
+        screen.blit(background_img, (0, 0))
+        screen.blit(font.render("Hidden Key Maze Escape", True, BLACK), (150, 150))
+        screen.blit(font.render("Press ENTER to Start", True, BLUE), (150, 200))
+        pygame.display.update()
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit(); sys.exit()
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_RETURN:
+                menu = False
+                fade_in = True
+                brightness_alpha = 255
+        continue
+
+    screen.blit(background_img, (0, 0))
+    draw_maze()
+    screen.blit(bee_img_scaled, (enemy_pos[1] * TILE_SIZE, enemy_pos[0] * TILE_SIZE))
+    screen.blit(current_bear_img, (player_pos[1] * TILE_SIZE, player_pos[0] * TILE_SIZE))
+    draw_fog()
+
+    elapsed = time.time() - start_time
+    time_left = countdown - int(elapsed)
+    screen.blit(font.render(f"Time: {max(0, time_left)}", True, BLACK), (10, 10))
+
+    if time_left <= 0:
+        lost = True
+        fade_out = True
+
+    if player_pos == key_pos and not has_key:
+        has_key = True
+        key_sound.play()
+
+    if player_pos == door_pos and has_key:
+        door_sound.play()
+        won = True
+        fade_out = True
+
+    if player_pos == powerup_pos and not has_powerup:
+        has_powerup = True
+        powerup_timer = time.time()
+        fog_radius = 180
+
+    if has_powerup and time.time() - powerup_timer > 5:
+        fog_radius = 90
+
+    if player_pos == enemy_pos:
+        lose_sound.play()
+        lost = True
+        fade_out = True
+
+    if fade_in:
+        brightness_alpha -= fade_speed
+        if brightness_alpha <= 0:
+            brightness_alpha = 0
+            fade_in = False
+
+    if fade_out:
+        brightness_alpha += fade_speed
+        if brightness_alpha >= 255:
+            brightness_alpha = 255
+            fade_out = False
+            if won:
+                level = (level + 1) % len(mazes)
+                maze = mazes[level]
+                reset()
+                menu = True
+            elif lost:
+                reset()
+                menu = True
+
+    fade_overlay = pygame.Surface((WIDTH, HEIGHT))
+    fade_overlay.fill(BLACK)
+    fade_overlay.set_alpha(brightness_alpha)
+    screen.blit(fade_overlay, (0, 0))
+    pygame.display.update()
+
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            pygame.quit(); sys.exit()
+        if event.type == pygame.KEYDOWN and not fade_in and not fade_out:
+            if event.key == pygame.K_UP:
+                move_player(0, -1)
+            elif event.key == pygame.K_DOWN:
+                move_player(0, 1)
+            elif event.key == pygame.K_LEFT:
+                move_player(-1, 0)
+            elif event.key == pygame.K_RIGHT:
+                move_player(1, 0)
+
+    if not fade_in and not fade_out:
+        enemy_move_counter += 1
+        if enemy_move_counter >= enemy_move_delay:
+            move_enemy()
+            enemy_move_counter = 0
+
+    clock.tick(30)
